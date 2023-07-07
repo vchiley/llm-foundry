@@ -89,12 +89,12 @@ def build_ffn(
             tp_size = kwargs.get('tp_size', 1)
             if tp_group is None and tp_size == 1:
                 warnings.warn(f'tp (sp) not configured correctly and therefore will be disabled.')
-                # kwargs.pop('set_parallel_mode', None)
-                # kwargs.pop('sequence_parallel', None)
-                # kwargs.pop('tp_group', None)
-                # kwargs.pop('tp_size', None)
+                kwargs.pop('set_parallel_mode', None)
+                kwargs.pop('sequence_parallel', None)
+                kwargs.pop('tp_group', None)
+                kwargs.pop('tp_size', None)
             
-            if tp_group is None: # and tp_size != 1:
+            if tp_group is None and tp_size != 1:
                 world_size = dist.get_world_size()
                 if world_size % tp_size != 0:
                     raise RuntimeError(f'{world_size} must be divisible by {tp_size=}.')
@@ -105,10 +105,9 @@ def build_ffn(
                 tp_group = current_group
                 kwargs['tp_group'] = tp_group
             
-            # if tp_group is not None and tp_size == 1:
-            #     # TODO init tp_group
-            #     tp_size = tp_group.size()
-            #     kwargs['tp_size'] = tp_size
+            if tp_group is not None and tp_size == 1:
+                tp_size = tp_group.size()
+                kwargs['tp_size'] = tp_size
 
         mlp = te.LayerNormMLP(
             hidden_size=d_model,
@@ -117,7 +116,7 @@ def build_ffn(
         )
 
         if parallel_mode:
-            mlp._fsdp_process_group = f"mod{kwargs.get('tp_size')}"
+            mlp._fsdp_process_group = f"mod{tp_size}"
 
         return mlp
 
