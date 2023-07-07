@@ -3,10 +3,14 @@
 
 """GPT Blocks used for the GPT Model."""
 
+import warnings
 from typing import Optional
 
 import torch
 import torch.nn as nn
+from torch import distributed
+
+from composer.utils import dist
 
 from llmfoundry.models.layers.attention import ATTN_CLASS_REGISTRY
 from llmfoundry.models.layers.fc import FC_CLASS_REGISTRY
@@ -75,10 +79,46 @@ def build_ffn(
             device=device,
         )
     elif ffn_type == 'te_ln_mlp':
-        return te.LayerNormMLP(
+        parallel_mode = kwargs.get('set_parallel_mode', False)
+        if parallel_mode:
+            if not kwargs.get('sequence_parallel', False):
+                warnings.warn(
+                    'Unexpected usage: te.LayerNormMLP args are `set_parallel_mode: true` and `sequence_parallel: false`.'
+                )
+            tp_group = kwargs.get('tp_group', None)
+            tp_size = kwargs.get('tp_size', 1)
+            if tp_group is None and tp_size == 1:
+                warnings.warn(f'tp (sp) not configured correctly and therefore will be disabled.')
+                # kwargs.pop('set_parallel_mode', None)
+                # kwargs.pop('sequence_parallel', None)
+                # kwargs.pop('tp_group', None)
+                # kwargs.pop('tp_size', None)
+            
+            if tp_group is None: # and tp_size != 1:
+                world_size = dist.get_world_size()
+                if world_size % tp_size != 0:
+                    raise RuntimeError(f'{world_size} must be divisible by {tp_size=}.')
+                start = dist.get_global_rank() // tp_size * tp_size
+                ranks = tuple(range(start, start + tp_size))
+                ranks_per_subgroup_list = list(set(dist.all_gather_object(ranks)))
+                current_group, _subgroups = distributed.distributed_c10d.new_subgroups_by_enumeration(ranks_per_subgroup_list)
+                tp_group = current_group
+                kwargs['tp_group'] = tp_group
+            
+            # if tp_group is not None and tp_size == 1:
+            #     # TODO init tp_group
+            #     tp_size = tp_group.size()
+            #     kwargs['tp_size'] = tp_size
+
+        mlp = te.LayerNormMLP(
             hidden_size=d_model,
             ffn_hidden_size=d_model * expansion_ratio,
             **kwargs,
         )
+
+        if parallel_mode:
+            mlp._fsdp_process_group = f"mod{kwargs.get('tp_size')}"
+
+        return mlp
 
     raise ValueError(f'{ffn_type=} not recognized.')

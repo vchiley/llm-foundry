@@ -476,6 +476,8 @@ class MPTModel(MPTPreTrainedModel):
 
     # FSDP Wrap function
     def fsdp_wrap_fn(self, module):
+        if hasattr(module, '_fsdp_process_group'):
+            return {'process_group': module._fsdp_process_group}
         return isinstance(module, MPTBlock)
 
     # Activation Checkpointing
