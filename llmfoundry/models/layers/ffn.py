@@ -8,9 +8,8 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-from torch import distributed
-
 from composer.utils import dist
+from torch import distributed
 
 from llmfoundry.models.layers.attention import ATTN_CLASS_REGISTRY
 from llmfoundry.models.layers.fc import FC_CLASS_REGISTRY
@@ -57,6 +56,29 @@ FFN_CLASS_REGISTRY = {
 }
 
 if te is not None:
+
+    def te_ln_mlp_n_params(parent_cls):
+        n_params = 0
+        for m_n, m in parent_cls.named_modules():
+            for p_n, p in m.named_parameters():
+                if '.' not in p_n:
+                    # local params
+                    if isinstance(m, te.LayerNormMLP):
+                        if p_n in [
+                                'layer_norm_weight', 'layer_norm_bias',
+                                'fc2_bias'
+                        ]:
+                            n_params += p.numel()
+                        elif p_n in ['fc1_weight', 'fc1_bias', 'fc2_weight']:
+                            n_params += (p.numel() * m.tp_size)
+                        else:
+                            RuntimeError(f'te_ln_mlp_n_params fn has error.')
+                    else:
+                        n_params += p.numel()
+        return n_params
+
+    te.LayerNormMLP.parent_n_active_params = staticmethod(te_ln_mlp_n_params)
+
     te.LayerNormMLP._has_norm = True
     FFN_CLASS_REGISTRY['te_ln_mlp'] = te.LayerNormMLP
 
@@ -89,23 +111,28 @@ def build_ffn(
             tp_group = kwargs.get('tp_group', None)
             tp_size = kwargs.get('tp_size', 1)
             if tp_group is None and tp_size == 1:
-                warnings.warn(f'tp (sp) not configured correctly and therefore will be disabled.')
+                warnings.warn(
+                    f'tp (sp) not configured correctly and therefore will be disabled.'
+                )
                 kwargs.pop('set_parallel_mode', None)
                 kwargs.pop('sequence_parallel', None)
                 kwargs.pop('tp_group', None)
                 kwargs.pop('tp_size', None)
-            
+
             if tp_group is None and tp_size != 1:
                 world_size = dist.get_world_size()
                 if world_size % tp_size != 0:
-                    raise RuntimeError(f'{world_size} must be divisible by {tp_size=}.')
+                    raise RuntimeError(
+                        f'{world_size} must be divisible by {tp_size=}.')
                 start = dist.get_global_rank() // tp_size * tp_size
                 ranks = tuple(range(start, start + tp_size))
-                ranks_per_subgroup_list = list(set(dist.all_gather_object(ranks)))
-                current_group, _subgroups = distributed.distributed_c10d.new_subgroups_by_enumeration(ranks_per_subgroup_list)
+                ranks_per_subgroup_list = list(
+                    set(dist.all_gather_object(ranks)))
+                current_group, _subgroups = distributed.distributed_c10d.new_subgroups_by_enumeration(
+                    ranks_per_subgroup_list)
                 tp_group = current_group
                 kwargs['tp_group'] = tp_group
-            
+
             if tp_group is not None and tp_size == 1:
                 tp_size = tp_group.size()
                 kwargs['tp_size'] = tp_size
@@ -117,7 +144,7 @@ def build_ffn(
         )
 
         if parallel_mode:
-            mlp._fsdp_process_group = f"mod{tp_size}"
+            mlp._fsdp_process_group = f'mod{tp_size}'
 
         return mlp
 
