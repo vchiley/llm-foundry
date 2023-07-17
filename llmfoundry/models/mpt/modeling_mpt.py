@@ -471,6 +471,8 @@ class MPTModel(MPTPreTrainedModel):
 
     # FSDP Wrap function
     def fsdp_wrap_fn(self, module):
+        if hasattr(module, '_fsdp_process_group'):
+            return {'process_group': module._fsdp_process_group}
         return isinstance(module, MPTBlock)
 
     # Activation Checkpointing
@@ -706,7 +708,7 @@ class ComposerMPTCausalLM(HuggingFaceModel):
             allow_embedding_resizing=True,
         )
 
-        self.n_active_params = sum(p.numel() for p in self.parameters())
+        self._n_active_params = None
 
         loss_fn_config = om_model_config.get('loss_fn', 'fused_crossentropy')
         if loss_fn_config == 'fused_crossentropy':
@@ -750,6 +752,21 @@ class ComposerMPTCausalLM(HuggingFaceModel):
         targets = self.get_targets(batch)
         return self.loss_fn(outputs.logits.view(-1, outputs.logits.size(-1)),
                             targets.view(-1))
+
+    @property
+    def n_active_params(self):
+        if self._n_active_params is not None:
+            return self._n_active_params
+
+        ffn_type = self.model.config.ffn_config['ffn_type']
+        if ffn_type == 'te_ln_mlp':
+            _cls = FFN_CLASS_REGISTRY[ffn_type]
+            self._n_active_params = _cls.parent_n_active_params(self)
+        else:
+            # default behavior
+            self._n_active_params = sum(p.numel() for p in self.parameters())
+
+        return self._n_active_params
 
     def flops_per_batch(self, batch):
         # Note: this computation does not take into account padding, and assumes

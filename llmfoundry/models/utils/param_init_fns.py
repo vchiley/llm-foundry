@@ -209,6 +209,18 @@ def generic_param_init_fn_(
         if module.fc2_bias is not None:
             torch.nn.init.zeros_(module.fc2_bias)
 
+        if module.tp_size > 1:
+            if 'kaiming_' in init_fn_.func.__name__:
+                with torch.no_grad():
+                    if init_fn_.keywords.get('mode', 'fan_in') == 'fan_in':
+                        module.fc1_weight.div_(math.sqrt(module.tp_size))
+                    else:
+                        module.fc2_weight.div_(math.sqrt(module.tp_size))
+            else:
+                warnings.warn(
+                    f'te.LayerNormMLP layer is using tp; init_fn ({init_fn_.func.__name__}) not being adjusted for TP split.'
+                )
+        
         with torch.no_grad():
             module.fc2_weight.div_(div_is_residual)
 
