@@ -422,6 +422,7 @@ def _extract_param_groups(
                     log.debug(f'Setting `{n}.requires_grad = False`.')
 
     param_groups_config = optimizer_config.pop('param_groups', None)
+    print(param_groups_config)
     if param_groups_config is not None:
         params = []
         param_dict = OrderedDict((n, p) for n, p in model.named_parameters())
